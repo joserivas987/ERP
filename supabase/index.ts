@@ -121,14 +121,15 @@ Deno.serve(async (req) => {
     if (especialidad === "laboral") {
       system = SYS_LABORAL;
     } else if (especialidad === "contable") {
-      // 1) Cuota: 300 consultas/usuario/mes (atómico en la BD)
-      const { data: quota, error: qErr } = await supabase.rpc("fn_ia_consumo", { p_max: IA_LIMITE });
+      // 1) Cuota: 300 consultas/usuario/mes
+      const { data: quota, error: qErr } = await supabase.rpc("fn_ia_consumo", { p_company_id: empresa });
       if (qErr) return json({ error: "No se pudo verificar la cuota de IA." }, 500);
-      if (quota && quota.permitido === false) {
+      
+      // Controlar cuota si el retorno de la función indica límite alcanzado
+      if (quota === false) {
         return json({
           respuesta: `Has alcanzado el límite de ${IA_LIMITE} consultas de IA de este mes. ` +
             `Tu cuota se renueva el día 1 del próximo período.`,
-          cuota: quota,
         });
       }
 
@@ -137,19 +138,23 @@ Deno.serve(async (req) => {
         system = SYS_CFO_DIRECTORIO;
         const now = new Date();
         const anio = now.getFullYear(), mes = now.getMonth() + 1;
+        
+        // Ejecutar funciones reales del módulo de Control de Gestión
         const [dv, kp] = await Promise.all([
-          supabase.rpc("fn_budget_vs_actual", { p_company_id: empresa, p_anio: anio, p_mes: mes }),
-          supabase.rpc("fn_kpis_gestion",     { p_company_id: empresa, p_anio: anio, p_mes: mes }),
+          supabase.rpc("fn_budget_vs_actual", { p_company_id: empresa, p_year: anio, p_month: mes }),
+          supabase.rpc("fn_kpis_gestion",     { p_company_id: empresa, p_year: anio, p_month: mes }),
         ]);
+        
         if (dv.error || kp.error) return json({ error: "Acceso denegado al contexto de gestión." }, 403);
-        contexto = "CONTROL_GESTION(JSON):\n" +
-          JSON.stringify({ desviaciones: dv.data, kpis: kp.data });
+        contexto = "CONTROL_GESTION(JSON):\n" + JSON.stringify({ desviaciones: dv.data, kpis: kp.data });
+      
       } else {
         system = SYS_CFO_OPERATIVO;
         const { data: ctx, error } = await supabase.rpc("fn_cfo_context", { p_company_id: empresa });
         if (error) return json({ error: "Acceso denegado al contexto de la empresa." }, 403);
         contexto = "CONTEXTO_EMPRESA(JSON):\n" + JSON.stringify(ctx);
       }
+      
       // El contexto va en el system → no rompe la alternancia de mensajes.
       system += "\n\n" + contexto;
     } else if (especialidad === "tributario") {
